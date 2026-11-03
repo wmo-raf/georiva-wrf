@@ -7,8 +7,11 @@ import wrf_to_georiva as w
 NY, NX, NT = 4, 5, 2
 
 
-def make_wrfout(path, map_proj=3, gust=False, skew=False, lat_axis=None, t2_of_lat=False):
+def make_wrfout(path, map_proj=3, gust=False, skew=False, lat_axis=None, t2_of_lat=False,
+                rainc=True, cu=0, shcu=0):
     ds = netCDF4.Dataset(str(path), "w")
+    ds.CU_PHYSICS = cu
+    ds.SHCU_PHYSICS = shcu
     ds.createDimension("Time", None)
     ds.createDimension("DateStrLen", 19)
     ds.createDimension("south_north", NY)
@@ -40,7 +43,11 @@ def make_wrfout(path, map_proj=3, gust=False, skew=False, lat_axis=None, t2_of_l
     var("U10", d2, np.full((NT, NY, NX), 3.0))
     var("V10", d2, np.full((NT, NY, NX), 4.0))
     var("RAINNC", d2, np.full((NT, NY, NX), 2.0))
-    var("RAINC", d2, np.full((NT, NY, NX), 1.0))
+    if rainc:
+        var("RAINC", d2, np.full((NT, NY, NX), 1.0))
+        var("RAINSH", d2, np.full((NT, NY, NX), 0.5))
+    var("PBLH", d2, np.full((NT, NY, NX), 850.0))
+    var("VEGFRA", d2, np.full((NT, NY, NX), 62.5))
     var("CLDFRA", ("Time", "bottom_top", "south_north", "west_east"),
         np.full((NT, 3, NY, NX), 0.4))
     if gust:
@@ -59,9 +66,67 @@ def test_output_variables_units_and_schema(tmp_path):
         assert units == {"t2": "K", "d2m": "K", "msl": "Pa", "u10": "m s-1",
                          "v10": "m s-1", "tp": "mm", "tcc": "1", "fg10": "m s-1"}
         assert ds["t2"].shape == (NT, NY, NX)
-        assert float(ds["tp"][0, 0, 0]) == pytest.approx(3.0)
+        assert float(ds["tp"][0, 0, 0]) == pytest.approx(3.5)
         assert float(ds["tcc"][0, 0, 0]) == pytest.approx(0.4)
         assert float(ds["d2m"][0, 0, 0]) <= 300.0
+
+
+def test_direct_copies(tmp_path):
+    src = make_wrfout(tmp_path / "f")
+    out = w.convert(src, str(tmp_path / "o"))
+    expected = {"psfc": (90000.0, "Pa"), "pblh": (850.0, "m"), "vegfra": (62.5, "%")}
+    with netCDF4.Dataset(out) as ds:
+        assert ds.georiva_wrf_schema == 1
+        for name, (value, units) in expected.items():
+            assert ds[name].units == units
+            assert ds[name].shape == (NT, NY, NX)
+            assert np.allclose(ds[name][:], value)
+        # with no cumulus physics, rain is only written as tp
+        assert not {"rainc", "rainnc", "rainsh"} & set(ds.variables)
+
+
+def test_tp_without_rainc(tmp_path):
+    out = w.convert(make_wrfout(tmp_path / "f", rainc=False), str(tmp_path / "o"))
+    with netCDF4.Dataset(out) as ds:
+        assert float(ds["tp"][0, 0, 0]) == pytest.approx(2.0)
+
+
+def test_direct_copies_resampled_with_mercator_rows(tmp_path):
+    src = make_wrfout(tmp_path / "f", lat_axis=MERC_LAT)
+    out = w.convert(src, str(tmp_path / "o"))
+    with netCDF4.Dataset(out) as ds:
+        # constant fields stay constant through the row resampling
+        assert np.allclose(ds["pblh"][:], 850.0)
+        assert ds["pblh"].shape == ds["t2"].shape
+
+
+def test_rain_components_with_cumulus(tmp_path):
+    out = w.convert(make_wrfout(tmp_path / "f", cu=1), str(tmp_path / "o"))
+    with netCDF4.Dataset(out) as ds:
+        assert np.allclose(ds["rainnc"][:], 2.0)
+        assert np.allclose(ds["rainc"][:], 1.0)
+        assert np.allclose(ds["rainsh"][:], 0.5)
+        assert np.allclose(ds["tp"][:], 3.5)
+
+
+def test_rain_components_with_shallow_cumulus_only(tmp_path):
+    out = w.convert(make_wrfout(tmp_path / "f", shcu=1), str(tmp_path / "o"))
+    with netCDF4.Dataset(out) as ds:
+        assert "rainsh" in ds.variables and "rainnc" in ds.variables
+
+
+def test_rain_components_missing_wrfout_var(tmp_path):
+    out = w.convert(make_wrfout(tmp_path / "f", cu=1, rainc=False), str(tmp_path / "o"))
+    with netCDF4.Dataset(out) as ds:
+        assert "rainnc" in ds.variables
+        assert "rainc" not in ds.variables and "rainsh" not in ds.variables
+
+
+def test_rain_components_resampled(tmp_path):
+    out = w.convert(make_wrfout(tmp_path / "f", lat_axis=MERC_LAT, cu=1), str(tmp_path / "o"))
+    with netCDF4.Dataset(out) as ds:
+        assert ds["rainc"].shape == ds["t2"].shape
+        assert np.allclose(ds["rainc"][:], 1.0)
 
 
 def test_gust_optional(tmp_path):

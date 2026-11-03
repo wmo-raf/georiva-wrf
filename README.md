@@ -9,18 +9,30 @@ GeoRiva NetCDF file. It does not send anything. Sending is done by
 `wrf_YYYYMMDDTHHZ.nc`, named by the run start time (UTC), with global attribute
 `georiva_wrf_schema = 1`.
 
-| Variable | Meaning | Units |
-|---|---|---|
-| `t2` | 2 m air temperature | K |
-| `d2m` | 2 m dew point (capped at `t2`) | K |
-| `msl` | mean sea level pressure | Pa |
-| `u10`, `v10` | 10 m wind, earth-relative | m s-1 |
-| `tp` | precipitation accumulated from run start | mm |
-| `tcc` | total cloud cover | 1 (0 to 1) |
-| `fg10` | 10 m max wind since previous step (only with `nwp_diagnostics = 1`) | m s-1 |
+| Variable     | Meaning                                                             | Units        |
+|--------------|---------------------------------------------------------------------|--------------|
+| `t2`         | 2 m air temperature                                                 | K            |
+| `d2m`        | 2 m dew point (capped at `t2`)                                      | K            |
+| `msl`        | mean sea level pressure                                             | Pa           |
+| `u10`, `v10` | 10 m wind, earth-relative                                           | m s-1        |
+| `tp`         | precipitation accumulated from run start                            | mm           |
+| `tcc`        | total cloud cover                                                   | 1 (0 to 1)   |
+| `fg10`       | 10 m max wind since previous step (only with `nwp_diagnostics = 1`) | m s-1        |
+| `psfc`       | surface pressure                                                    | Pa           |
+| `pblh`       | planetary boundary layer height                                     | m            |
+| `vegfra`     | vegetation fraction                                                 | % (0 to 100) |
+
+`tp` is the sum of WRF's rain components (`RAINNC`, `RAINC`, `RAINSH`). With
+`cu_physics = 0` and `shcu_physics = 0` it equals `RAINNC` and only `tp` is written.
+If either setting is nonzero, `rainnc`, `rainc` and `rainsh` (mm, accumulated from
+run start, those present in the wrfout) are written as well.
 
 Renaming or removing a variable breaks a configured catalog's Variable sources,
-so it bumps `georiva_wrf_schema` and is a breaking release.
+so it bumps `georiva_wrf_schema` and is a breaking release. Adding a variable
+does not.
+
+Memory stays at about 140 MB whatever the run length: input is read one step
+at a time and the netCDF chunk cache is capped at 4 MB per variable.
 
 On a Mercator grid the latitude rows are unevenly spaced, so every field is
 linearly resampled along latitude onto a uniform axis (same extent, same number

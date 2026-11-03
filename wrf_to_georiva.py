@@ -19,10 +19,17 @@ Variables written (native units, GeoRiva handles conversions):
     tcc    total cloud cover (maximum overlap)       1     (0 to 1)
     fg10   10 m max wind speed since previous step   m s-1 (only if WRF was
            run with nwp_diagnostics = 1)
+    psfc   surface pressure                          Pa
+    pblh   boundary layer height                     m
+    vegfra vegetation fraction                       %     (0 to 100)
+    rainnc, rainc, rainsh  grid-scale, convective and shallow convective
+           precipitation, accumulated from run start  mm
+           (only if CU_PHYSICS or SHCU_PHYSICS is nonzero; tp is always
+           written and is their sum)
 
 Global attribute georiva_wrf_schema = 1 marks the variable set above. Renaming
 or removing a variable breaks configured GeoRiva catalogs, so it bumps the
-schema and is a breaking release.
+schema and is a breaking release. Adding a variable does not.
 
 Sending is not done here: use georiva_push.py (see README.md).
 
@@ -46,11 +53,16 @@ except ImportError as exc:  # pragma: no cover
              "conda install -c conda-forge numpy netcdf4".format(exc))
 
 REQUIRED_VARS = ["Times", "XLAT", "XLONG", "T2", "Q2", "PSFC", "HGT",
-                 "U10", "V10", "RAINNC", "CLDFRA"]
+                 "U10", "V10", "RAINNC", "CLDFRA", "PBLH", "VEGFRA"]
 OPTIONAL_RAIN = ["RAINC", "RAINSH"]
 GUST_VAR = "WSPD10MAX"
 FILE_PREFIX = "wrf_"
 SCHEMA_VERSION = 1
+
+# netCDF keeps a chunk cache per output variable (64 MB each by default), which
+# grows to several hundred MB when every variable is written one timestep at a
+# time. Each step is a single chunk written once, so a small cache costs nothing.
+CHUNK_CACHE_BYTES = 4 * 1024 * 1024
 # WRF MAP_PROJ codes: 1 Lambert, 2 polar stereographic, 3 Mercator, 6 lat-lon
 SUPPORTED_PROJ = {3: "Mercator", 6: "regular lat-lon"}
 UNSUPPORTED_PROJ = {1: "Lambert conformal", 2: "polar stereographic"}
@@ -148,6 +160,7 @@ def sea_level_pressure(psfc, hgt, t2):
 
 
 def convert(src, outdir):
+    netCDF4.set_chunk_cache(CHUNK_CACHE_BYTES, 101, 1.0)
     ds = netCDF4.Dataset(src)
     ds.set_auto_mask(False)
     missing = [v for v in REQUIRED_VARS if v not in ds.variables]
@@ -241,6 +254,26 @@ def convert(src, outdir):
         vars_out["fg10"] = make("fg10", "wind_speed_of_gust",
                                 "10 m maximum wind speed since previous output step", "m s-1")
 
+    # Direct copies: written exactly as WRF stores them, apart from the latitude
+    # resampling every field gets. Output name -> wrfout name.
+    direct = {
+        "psfc": ("PSFC", make("psfc", "surface_air_pressure", "surface pressure", "Pa")),
+        "pblh": ("PBLH", make("pblh", "atmosphere_boundary_layer_thickness",
+                              "planetary boundary layer height", "m")),
+        "vegfra": ("VEGFRA", make("vegfra", "vegetation_area_fraction",
+                                  "vegetation fraction", "%")),
+    }
+    # Rain components only when a cumulus scheme can produce a non-trivial split;
+    # otherwise tp already equals RAINNC. A missing attribute counts as 0.
+    if any(int(getattr(ds, a, 0) or 0) != 0 for a in ("CU_PHYSICS", "SHCU_PHYSICS")):
+        parts = {"rainnc": ("RAINNC", "grid-scale"), "rainc": ("RAINC", "convective"),
+                 "rainsh": ("RAINSH", "shallow convective")}
+        for name_out, (wname, label) in parts.items():
+            if wname in ds.variables:
+                direct[name_out] = (wname, make(
+                    name_out, None,
+                    "{} precipitation accumulated from start of run".format(label), "mm"))
+
     V = ds.variables
     hgt = V["HGT"][0].astype("f8")
     if has_rot:
@@ -265,6 +298,8 @@ def convert(src, outdir):
         vars_out["tcc"][i] = R(np.clip(V["CLDFRA"][i].max(axis=0), 0.0, 1.0))
         if has_gust:
             vars_out["fg10"][i] = R(V[GUST_VAR][i].astype("f8"))
+        for src_name, var_out in direct.values():
+            var_out[i] = R(V[src_name][i].astype("f8"))
 
     out.close()
     ds.close()
