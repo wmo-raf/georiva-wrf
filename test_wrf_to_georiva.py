@@ -86,3 +86,14 @@ def test_lambert_refused_naming_projection(tmp_path):
 def test_no_ftp_flags():
     with pytest.raises(SystemExit):
         w.main(["x", "--ftp-host", "h"])
+
+
+def test_prune_never_removes_file_just_written(tmp_path):
+    out = tmp_path / "o"
+    out.mkdir()
+    for d in ["20270101T00Z", "20270102T00Z"]:
+        (out / ("wrf_%s.nc" % d)).write_bytes(b"x")
+    new = out / "wrf_20261027T06Z.nc"
+    new.write_bytes(b"x")
+    w.prune_local(str(out), 1, protect=str(new))
+    assert new.exists()

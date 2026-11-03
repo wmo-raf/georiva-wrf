@@ -238,9 +238,11 @@ def convert(src, outdir):
     return final_path
 
 
-def prune_local(outdir, keep):
+def prune_local(outdir, keep, protect=None):
     files = sorted(glob.glob(os.path.join(outdir, FILE_PREFIX + "*.nc")))
     for old in files[:-keep] if keep > 0 else []:
+        if protect and os.path.abspath(old) == os.path.abspath(protect):
+            continue
         os.remove(old)
         log("Removed local {}".format(os.path.basename(old)))
 
@@ -261,8 +263,8 @@ def main(argv=None):
         sys.exit("ERROR: {} not found".format(src))
     log("Input {}".format(src))
 
-    convert(src, a.outdir)
-    prune_local(a.outdir, a.keep)
+    path = convert(src, a.outdir)
+    prune_local(a.outdir, a.keep, protect=path)
     log("Done")
 
 
