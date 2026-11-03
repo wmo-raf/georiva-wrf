@@ -134,3 +134,12 @@ def test_regular_grid_passes_through(tmp_path):
     with netCDF4.Dataset(out) as ds:
         assert np.allclose(ds["lat"][:], np.linspace(-1, 1, NY))
         assert "resampl" not in ds.history.lower()
+
+
+def test_descending_latitude_resampled(tmp_path):
+    src = make_wrfout(tmp_path / "f", lat_axis=MERC_LAT[::-1], t2_of_lat=True)
+    out = w.convert(src, str(tmp_path / "o"))
+    with netCDF4.Dataset(out) as ds:
+        lat = ds["lat"][:]
+        assert np.ptp(np.diff(lat)) < 1e-9 and lat[0] > lat[-1]
+        assert np.allclose(ds["t2"][0, :, 0], 250.0 + lat, atol=1e-3)
