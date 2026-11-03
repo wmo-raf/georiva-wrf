@@ -97,3 +97,12 @@ def test_prune_never_removes_file_just_written(tmp_path):
     new.write_bytes(b"x")
     w.prune_local(str(out), 1, protect=str(new))
     assert new.exists()
+
+
+def test_same_input_gives_identical_bytes(tmp_path):
+    import hashlib
+    src = make_wrfout(tmp_path / "f")
+    a = w.convert(src, str(tmp_path / "a"))
+    b = w.convert(src, str(tmp_path / "b"))
+    h = lambda p: hashlib.sha256(open(p, "rb").read()).hexdigest()
+    assert h(a) == h(b)

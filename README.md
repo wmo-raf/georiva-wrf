@@ -38,7 +38,9 @@ python3 wrf_to_georiva.py WRFOUT_FILE [--outdir DIR] [--keep N]
 - Exactly one input file. Passing several is an error.
 - `--keep N` keeps the newest N converted files in `--outdir` (default 5, 0 = all).
   Retention of *sent* files belongs to `georiva_push.py send --dir --keep`,
-  which only removes files it has sent.
+  which only removes files it has sent. Note `--keep` here counts files whether
+  or not they were sent, so after a long outage raise it (or use 0) to avoid
+  deleting output that has not been sent yet.
 
 ## Sending to GeoRiva
 
@@ -53,7 +55,9 @@ python3 $GEO/wrf_to_georiva.py $RUN/wrfout_d01_<run> --outdir $GEO/OUT \
 ```
 
 **2. Cron, converting the newest run on a schedule.** The script takes one file,
-so pick it in the shell. A `.sent` marker makes repeat runs skip an unchanged file:
+so pick it in the shell. Output is byte-identical for the same input, so the `.sent` marker makes repeat
+runs skip an unchanged file. `--dir` leaves files modified in the last 120 s for
+the next pass:
 
 ```
 30 * * * * f=$(ls -1 $RUN/wrfout_d01_* | tail -1) && python3 $GEO/wrf_to_georiva.py "$f" --outdir $GEO/OUT && python3 $GEO/georiva_push.py send --dir $GEO/OUT --keep 5 --config $GEO/sender.conf

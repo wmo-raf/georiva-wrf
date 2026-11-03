@@ -158,8 +158,9 @@ def convert(src, outdir):
                   + ", " + getattr(ds, "MAP_PROJ_CHAR", "") + " grid")
     out.georiva_wrf_schema = np.int32(SCHEMA_VERSION)
     out.forecast_reference_time = start.strftime("%Y-%m-%dT%H:%M:%SZ")
-    out.history = "{} wrf_to_georiva.py from {}".format(
-        dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), os.path.basename(src))
+    # No wall-clock time here: the same input must give byte-identical output, so
+    # georiva_push.py's checksum marker skips an unchanged file on a repeat run.
+    out.history = "wrf_to_georiva.py from {}".format(os.path.basename(src))
 
     out.createDimension("time", None)
     out.createDimension("lat", ny)
@@ -244,6 +245,8 @@ def prune_local(outdir, keep, protect=None):
         if protect and os.path.abspath(old) == os.path.abspath(protect):
             continue
         os.remove(old)
+        if os.path.exists(old + ".sent"):  # georiva_push.py marker
+            os.remove(old + ".sent")
         log("Removed local {}".format(os.path.basename(old)))
 
 
