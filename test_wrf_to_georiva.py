@@ -7,7 +7,7 @@ import wrf_to_georiva as w
 NY, NX, NT = 4, 5, 2
 
 
-def make_wrfout(path, map_proj=3, gust=False, skew=False):
+def make_wrfout(path, map_proj=3, gust=False, skew=False, lat_axis=None, t2_of_lat=False):
     ds = netCDF4.Dataset(str(path), "w")
     ds.createDimension("Time", None)
     ds.createDimension("DateStrLen", 19)
@@ -21,7 +21,8 @@ def make_wrfout(path, map_proj=3, gust=False, skew=False):
     times = ds.createVariable("Times", "S1", ("Time", "DateStrLen"))
     for i, s in enumerate(["2026-10-27_06:00:00", "2026-10-27_07:00:00"]):
         times[i, :] = netCDF4.stringtochar(np.array([s], "S19"))[0]
-    lat = np.linspace(-1, 1, NY)[:, None] * np.ones((1, NX))
+    ax = np.linspace(-1, 1, NY) if lat_axis is None else np.asarray(lat_axis, float)
+    lat = ax[:, None] * np.ones((1, NX))
     lon = np.ones((NY, 1)) * np.linspace(36, 37, NX)[None, :]
     if skew:
         lon = lon + lat * 0.5
@@ -31,7 +32,8 @@ def make_wrfout(path, map_proj=3, gust=False, skew=False):
     d2 = ("Time", "south_north", "west_east")
     var("XLAT", d2, np.broadcast_to(lat, (NT, NY, NX)))
     var("XLONG", d2, np.broadcast_to(lon, (NT, NY, NX)))
-    var("T2", d2, np.full((NT, NY, NX), 300.0))
+    var("T2", d2, np.broadcast_to(250.0 + lat, (NT, NY, NX)) if t2_of_lat
+        else np.full((NT, NY, NX), 300.0))
     var("Q2", d2, np.full((NT, NY, NX), 0.012))
     var("PSFC", d2, np.full((NT, NY, NX), 90000.0))
     var("HGT", d2, np.full((NT, NY, NX), 1000.0))
@@ -106,3 +108,29 @@ def test_same_input_gives_identical_bytes(tmp_path):
     b = w.convert(src, str(tmp_path / "b"))
     h = lambda p: hashlib.sha256(open(p, "rb").read()).hexdigest()
     assert h(a) == h(b)
+
+
+MERC_LAT = np.degrees(np.arctan(np.sinh(np.linspace(-0.6, 0.2, NY))))
+
+
+def test_mercator_rows_resampled_to_uniform_axis(tmp_path):
+    src = make_wrfout(tmp_path / "f", lat_axis=MERC_LAT, t2_of_lat=True)
+    out = w.convert(src, str(tmp_path / "o"))
+    with netCDF4.Dataset(out) as ds:
+        lat = ds["lat"][:]
+        assert np.ptp(np.diff(lat)) < 1e-9
+        assert lat[0] == pytest.approx(MERC_LAT[0]) and lat[-1] == pytest.approx(MERC_LAT[-1])
+        assert len(lat) == NY
+        # T2 is linear in lat, so linear interpolation reproduces it exactly
+        assert np.allclose(ds["t2"][0, :, 0], 250.0 + lat, atol=1e-3)
+        assert "resampl" in ds.history.lower()
+        # end rows coincide with original rows: unchanged
+        assert float(ds["t2"][0, 0, 0]) == pytest.approx(250.0 + MERC_LAT[0], abs=1e-3)
+
+
+def test_regular_grid_passes_through(tmp_path):
+    src = make_wrfout(tmp_path / "f", t2_of_lat=True)
+    out = w.convert(src, str(tmp_path / "o"))
+    with netCDF4.Dataset(out) as ds:
+        assert np.allclose(ds["lat"][:], np.linspace(-1, 1, NY))
+        assert "resampl" not in ds.history.lower()

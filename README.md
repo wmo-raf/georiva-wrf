@@ -22,6 +22,10 @@ GeoRiva NetCDF file. It does not send anything. Sending is done by
 Renaming or removing a variable breaks a configured catalog's Variable sources,
 so it bumps `georiva_wrf_schema` and is a breaking release.
 
+On a Mercator grid the latitude rows are unevenly spaced, so every field is
+linearly resampled along latitude onto a uniform axis (same extent, same number
+of rows) and `history` says so. Regular lat-lon grids pass through unchanged.
+
 Only **Mercator** and **regular lat-lon** grids are supported. Lambert and
 polar-stereographic files are refused with a message naming the projection.
 

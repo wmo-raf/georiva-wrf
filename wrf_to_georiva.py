@@ -107,6 +107,32 @@ def grid_axes(ds):
     return lat, lon
 
 
+def lat_resampler(lat, tol=1e-6):
+    """Plan to move rows onto a uniform latitude axis, or None if already uniform.
+
+    Mercator rows are evenly spaced in projected y, not in latitude. Returns
+    (new_lat, i0, i1, w): new row k = old[i0[k]] * (1 - w[k]) + old[i1[k]] * w[k],
+    the same weights for every variable and step.
+    """
+    ny = len(lat)
+    new_lat = np.linspace(lat[0], lat[-1], ny)
+    if ny < 3 or np.abs(new_lat - lat).max() <= tol:
+        return None
+    sign = 1.0 if lat[-1] > lat[0] else -1.0
+    i0 = np.clip(np.searchsorted(sign * lat, sign * new_lat, side="right") - 1, 0, ny - 2)
+    w = (new_lat - lat[i0]) / (lat[i0 + 1] - lat[i0])
+    return new_lat, i0, i0 + 1, np.clip(w, 0.0, 1.0)
+
+
+def apply_resampler(plan, field):
+    """Resample ``field`` (rows on axis -2) with a plan from lat_resampler."""
+    if plan is None:
+        return field
+    _, i0, i1, w = plan
+    w = w[:, None]
+    return field[..., i0, :] * (1.0 - w) + field[..., i1, :] * w
+
+
 def dewpoint(t2, q2, psfc):
     """2 m dew point (K) from mixing ratio and surface pressure, capped at t2."""
     q = np.maximum(q2, 1e-10)
@@ -138,6 +164,10 @@ def convert(src, outdir):
         log("WARNING: steps are not evenly spaced")
 
     lat, lon = grid_axes(ds)
+    plan = lat_resampler(lat)
+    if plan is not None:
+        log("Mercator rows are not uniform in latitude: resampling onto a uniform axis")
+        lat = plan[0]
     rain_vars = ["RAINNC"] + [v for v in OPTIONAL_RAIN if v in ds.variables]
     has_gust = GUST_VAR in ds.variables
     has_rot = "COSALPHA" in ds.variables and "SINALPHA" in ds.variables
@@ -161,6 +191,9 @@ def convert(src, outdir):
     # No wall-clock time here: the same input must give byte-identical output, so
     # georiva_push.py's checksum marker skips an unchanged file on a repeat run.
     out.history = "wrf_to_georiva.py from {}".format(os.path.basename(src))
+    if plan is not None:
+        out.history += ("; latitude rows linearly resampled onto a uniform axis "
+                        "over the same extent and row count")
 
     out.createDimension("time", None)
     out.createDimension("lat", ny)
@@ -222,15 +255,16 @@ def convert(src, outdir):
         if has_rot:
             u, v = u * cosa - v * sina, v * cosa + u * sina
 
-        vars_out["t2"][i] = t2
-        vars_out["d2m"][i] = dewpoint(t2, q2, psfc)
-        vars_out["msl"][i] = sea_level_pressure(psfc, hgt, t2)
-        vars_out["u10"][i] = u
-        vars_out["v10"][i] = v
-        vars_out["tp"][i] = sum(V[r][i].astype("f8") for r in rain_vars)
-        vars_out["tcc"][i] = np.clip(V["CLDFRA"][i].max(axis=0), 0.0, 1.0)
+        R = lambda f: apply_resampler(plan, f)
+        vars_out["t2"][i] = R(t2)
+        vars_out["d2m"][i] = R(dewpoint(t2, q2, psfc))
+        vars_out["msl"][i] = R(sea_level_pressure(psfc, hgt, t2))
+        vars_out["u10"][i] = R(u)
+        vars_out["v10"][i] = R(v)
+        vars_out["tp"][i] = R(sum(V[r][i].astype("f8") for r in rain_vars))
+        vars_out["tcc"][i] = R(np.clip(V["CLDFRA"][i].max(axis=0), 0.0, 1.0))
         if has_gust:
-            vars_out["fg10"][i] = V[GUST_VAR][i]
+            vars_out["fg10"][i] = R(V[GUST_VAR][i].astype("f8"))
 
     out.close()
     ds.close()
