@@ -3,7 +3,7 @@
 wrf_to_georiva.py
 
 Convert a raw WRF output file (wrfout_d01_*) into a compact NetCDF file for
-GeoRiva, and optionally upload it to an FTP server.
+GeoRiva. Exactly one wrfout file in, one NetCDF file out.
 
 Output: one file per model run, named by the run start time in UTC:
     wrf_YYYYMMDDTHHZ.nc
@@ -20,24 +20,20 @@ Variables written (native units, GeoRiva handles conversions):
     fg10   10 m max wind speed since previous step   m s-1 (only if WRF was
            run with nwp_diagnostics = 1)
 
-Upload (optional): the file is sent as <name>.tmp and renamed once complete,
-so readers never see a half-written file. Older runs beyond --keep are removed.
+Global attribute georiva_wrf_schema = 1 marks the variable set above. Renaming
+or removing a variable breaks configured GeoRiva catalogs, so it bumps the
+schema and is a breaking release.
 
-Requirements: Python 3.6+, numpy, netCDF4. FTP uses the standard library.
+Sending is not done here: use georiva_push.py (see README.md).
 
-Examples:
-    # Convert only
+Requirements: Python 3.6+, numpy, netCDF4.
+
+Example:
     python3 wrf_to_georiva.py /path/to/wrfout_d01_2026-10-27_06:00:00 --outdir /data/georiva
-
-    # Convert and upload (password from environment)
-    export GEORIVA_FTP_PASSWORD='...'
-    python3 wrf_to_georiva.py /path/to/wrfout_d01_* --outdir /data/georiva \\
-        --ftp-host ftp.example.org --ftp-user kmd --ftp-dir wrf --keep 5
 """
 
 import argparse
 import datetime as dt
-import ftplib
 import glob
 import os
 import sys
@@ -54,6 +50,10 @@ REQUIRED_VARS = ["Times", "XLAT", "XLONG", "T2", "Q2", "PSFC", "HGT",
 OPTIONAL_RAIN = ["RAINC", "RAINSH"]
 GUST_VAR = "WSPD10MAX"
 FILE_PREFIX = "wrf_"
+SCHEMA_VERSION = 1
+# WRF MAP_PROJ codes: 1 Lambert, 2 polar stereographic, 3 Mercator, 6 lat-lon
+SUPPORTED_PROJ = {3: "Mercator", 6: "regular lat-lon"}
+UNSUPPORTED_PROJ = {1: "Lambert conformal", 2: "polar stereographic"}
 
 
 def log(msg):
@@ -78,6 +78,16 @@ def run_start(ds, times):
         except ValueError:
             pass
     return times[0]
+
+
+def check_projection(ds):
+    """Refuse grids that cannot be written as regular 1D lat/lon axes."""
+    code = getattr(ds, "MAP_PROJ", None)
+    if code is not None and int(code) not in SUPPORTED_PROJ:
+        name = UNSUPPORTED_PROJ.get(int(code),
+                                    getattr(ds, "MAP_PROJ_CHAR", "unknown"))
+        sys.exit("ERROR: grid projection is {} (MAP_PROJ={}). Only Mercator "
+                 "and regular lat-lon grids are supported.".format(name, int(code)))
 
 
 def grid_axes(ds):
@@ -118,6 +128,7 @@ def convert(src, outdir):
     if missing:
         sys.exit("ERROR: {} is missing variables: {}".format(src, ", ".join(missing)))
 
+    check_projection(ds)
     times = parse_times(ds)
     start = run_start(ds, times)
     steps = sorted(set((b - a).total_seconds() / 3600.0 for a, b in zip(times, times[1:])))
@@ -145,6 +156,7 @@ def convert(src, outdir):
     out.title = "WRF forecast subset for GeoRiva"
     out.source = (getattr(ds, "TITLE", "WRF").strip()
                   + ", " + getattr(ds, "MAP_PROJ_CHAR", "") + " grid")
+    out.georiva_wrf_schema = np.int32(SCHEMA_VERSION)
     out.forecast_reference_time = start.strftime("%Y-%m-%dT%H:%M:%SZ")
     out.history = "{} wrf_to_georiva.py from {}".format(
         dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), os.path.basename(src))
@@ -233,79 +245,24 @@ def prune_local(outdir, keep):
         log("Removed local {}".format(os.path.basename(old)))
 
 
-def upload(path, host, user, password, remote_dir, keep, port, tls, passive):
-    name = os.path.basename(path)
-    ftp = ftplib.FTP_TLS() if tls else ftplib.FTP()
-    ftp.connect(host, port, timeout=120)
-    ftp.login(user, password)
-    if tls:
-        ftp.prot_p()
-    ftp.set_pasv(passive)
-    if remote_dir:
-        try:
-            ftp.cwd(remote_dir)
-        except ftplib.error_perm:
-            ftp.mkd(remote_dir)
-            ftp.cwd(remote_dir)
-
-    tmp = name + ".tmp"
-    log("Uploading {} to {}:{}/{}".format(name, host, remote_dir, tmp))
-    with open(path, "rb") as fh:
-        ftp.storbinary("STOR " + tmp, fh, blocksize=1024 * 1024)
-    try:
-        ftp.delete(name)  # replace an earlier upload of the same run
-    except ftplib.error_perm:
-        pass
-    ftp.rename(tmp, name)
-    log("Renamed {} -> {}".format(tmp, name))
-
-    if keep > 0:
-        runs = sorted(f for f in ftp.nlst() if f.startswith(FILE_PREFIX) and f.endswith(".nc"))
-        for old in runs[:-keep]:
-            ftp.delete(old)
-            log("Removed remote {}".format(old))
-    ftp.quit()
-
-
-def main():
-    p = argparse.ArgumentParser(description="Convert wrfout to a GeoRiva NetCDF and optionally upload via FTP.")
-    p.add_argument("wrfout", nargs="+", help="wrfout_d01_* file(s); the latest by name is used")
+def main(argv=None):
+    p = argparse.ArgumentParser(
+        description="Convert one wrfout file to a GeoRiva NetCDF file.")
+    p.add_argument("wrfout", nargs="*", help="exactly one wrfout_d01_* file")
     p.add_argument("--outdir", default=".", help="local folder for output files (default: current)")
-    p.add_argument("--keep", type=int, default=5, help="runs to keep locally and on the FTP (default: 5, 0 = keep all)")
-    p.add_argument("--ftp-host", help="FTP host; omit to skip upload")
-    p.add_argument("--ftp-port", type=int, default=21)
-    p.add_argument("--ftp-user", default=os.environ.get("GEORIVA_FTP_USER"))
-    p.add_argument("--ftp-password", default=os.environ.get("GEORIVA_FTP_PASSWORD"),
-                   help="prefer the GEORIVA_FTP_PASSWORD environment variable")
-    p.add_argument("--ftp-dir", default="wrf", help="remote folder (default: wrf)")
-    p.add_argument("--ftp-tls", action="store_true", help="use explicit FTPS")
-    p.add_argument("--ftp-active", action="store_true", help="use active mode instead of passive")
-    a = p.parse_args()
+    p.add_argument("--keep", type=int, default=5,
+                   help="converted files to keep in --outdir (default: 5, 0 = keep all)")
+    a = p.parse_args(argv)
 
-    src = sorted(a.wrfout)[-1]
+    if len(a.wrfout) != 1:
+        p.error("expected exactly one wrfout file, got {}".format(len(a.wrfout)))
+    src = a.wrfout[0]
     if not os.path.isfile(src):
         sys.exit("ERROR: {} not found".format(src))
     log("Input {}".format(src))
 
-    path = convert(src, a.outdir)
+    convert(src, a.outdir)
     prune_local(a.outdir, a.keep)
-
-    if a.ftp_host:
-        if not a.ftp_user or not a.ftp_password:
-            sys.exit("ERROR: FTP user/password missing (use --ftp-user and GEORIVA_FTP_PASSWORD)")
-        last = None
-        for attempt in range(1, 4):
-            try:
-                upload(path, a.ftp_host, a.ftp_user, a.ftp_password, a.ftp_dir,
-                       a.keep, a.ftp_port, a.ftp_tls, not a.ftp_active)
-                break
-            except (ftplib.all_errors) as exc:
-                last = exc
-                log("Upload attempt {} failed: {}".format(attempt, exc))
-        else:
-            sys.exit("ERROR: upload failed after 3 attempts: {}".format(last))
-    else:
-        log("No --ftp-host given, skipping upload")
     log("Done")
 
 
