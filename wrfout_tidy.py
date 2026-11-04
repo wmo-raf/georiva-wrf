@@ -2,6 +2,8 @@
 """
 wrfout_tidy.py
 
+Author: Erick Otenyo (WMO Regional Office for Africa) Github @erick-otenyo
+
 Convert a raw WRF output file (wrfout_d01_*) into a compact, CF-conventions
 NetCDF file with standard variable names on a regular latitude/longitude axis,
 optionally reduced to daily or weekly values. One wrfout file in; one NetCDF
