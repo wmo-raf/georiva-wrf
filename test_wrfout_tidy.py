@@ -272,6 +272,7 @@ def test_daily_statistics(tmp_path):
         assert ds["t2_max"].cell_methods == "time: maximum"
         assert ds["tp_sum"].cell_methods == "time: sum"
         assert ds["t2_mean"].units == "K" and ds["tp_sum"].units == "mm"
+        assert ds["tp_sum"].long_name == "daily precipitation total"
 
 
 def test_daily_variable_set(tmp_path):
@@ -372,6 +373,7 @@ def test_weekly_statistics(tmp_path):
         assert at("tp_sum") == pytest.approx(168.0)
         assert at("fg10_max") == pytest.approx(168.0)
         assert ds["tp_sum"].cell_methods == "time: sum"
+        assert ds["tp_sum"].long_name == "weekly precipitation total"
 
 
 def test_weekly_variable_set_has_no_wind_components(tmp_path):

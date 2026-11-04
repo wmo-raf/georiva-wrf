@@ -473,7 +473,10 @@ def convert(src, outdir, products=("hourly",)):
                 std, long, units = defs[base]
                 if s == "sum":
                     std = None
-                    long = "{} total {}".format(product, long.replace(" accumulated from start of run", ""))
+                    if base == "tp":
+                        long = "{} precipitation total".format(product)
+                    else:
+                        long = "{} total {}".format(product, long.replace(" accumulated from start of run", ""))
                 else:
                     long = "{} {} of {}".format(product, STAT_WORD[s], long)
                 vars_out[(base, s)] = make("{}_{}".format(base, s), std, long, units,
