@@ -1,4 +1,12 @@
-# wrfout-tidy
+# wrf-scripts
+
+Scripts for post-processing WRF model output.
+
+## Scripts
+
+- [`wrfout-tidy`](#wrfout-tidy): `wrfout_tidy.py` converts raw `wrfout_d01_*` files into compact, CF-conventions NetCDF.
+
+## wrfout-tidy
 
 `wrfout_tidy.py` turns a raw WRF output file (`wrfout_d01_*`) into a compact,
 CF-conventions NetCDF file: standard variable names and units, a regular
@@ -8,7 +16,7 @@ daily or weekly values instead of every output step.
 One wrfout file in, one NetCDF file out per requested product. The tool only
 converts.
 
-## Products
+### Products
 
 Choose with `--product`, a comma separated list (default `hourly`). Each product
 is written to its own file, named by the run start time (UTC):
@@ -24,7 +32,7 @@ Every file has the global attributes `wrfout_tidy_schema = 1` and
 
 If any requested product cannot be built, the run fails and **none** are written.
 
-### Hourly variables
+#### Hourly variables
 
 | Variable     | Meaning                                                             | Units        |
 |--------------|---------------------------------------------------------------------|--------------|
@@ -47,7 +55,7 @@ run start, those present in the wrfout) are written as well.
 Renaming or removing a variable bumps `wrfout_tidy_schema` and is a breaking
 release. Adding a variable does not.
 
-### Daily and weekly variables
+#### Daily and weekly variables
 
 Each hourly variable is reduced to one value per period and renamed
 `<variable>_<stat>`, with `cell_methods` set. There is no bare `t2` in a daily or
@@ -79,7 +87,7 @@ close to zero almost everywhere.
 - On a Mercator grid, fields are resampled in latitude **before** aggregating, so
   `t2_max` is the true maximum of the delivered field.
 
-### Grids
+#### Grids
 
 Memory stays at about 140 MB whatever the run length: input is read one step
 at a time and the netCDF chunk cache is capped at 4 MB per variable.
@@ -93,11 +101,11 @@ polar-stereographic files are refused with a message naming the projection.
 
 Output is byte-identical for the same input.
 
-## Requirements
+### Requirements
 
 Python 3.6+, numpy, netCDF4 (`conda install -c conda-forge numpy netcdf4`).
 
-## Usage
+### Usage
 
 ```
 python3 wrfout_tidy.py WRFOUT_FILE [--product LIST] [--outdir DIR]
@@ -118,7 +126,7 @@ python3 wrfout_tidy.py wrfout_d01_2026-10-27_00:00:00 --outdir OUT
 python3 wrfout_tidy.py wrfout_d01_2026-10-27_00:00:00 --product daily,weekly --outdir OUT
 ```
 
-## Running it
+### Running it
 
 The tool takes one wrfout file, so pick the file in the shell. Output is
 byte-identical for the same input and each file is moved into place only once
@@ -150,7 +158,7 @@ are already complete, and `weekly` fails until 7 days exist.
 What happens to `$OUT` afterwards (copying, publishing, cleaning up) is up to the
 caller; the tool never moves or deletes anything but its own `.part` files.
 
-## Tests
+### Tests
 
 ```
 pip install pytest numpy netCDF4 && pytest
